@@ -101,6 +101,12 @@ class DebuggerCrossConfig:
         hex_port = "%04X" % self.debug_server_port
         return "grep -q :%s /proc/net/tcp /proc/net/tcp6 2>/dev/null" % hex_port
 
+    def get_debug_server_ready_marker(self, port):
+        return "%s ready on port %s" % (self.DEBUG_SERVER_NAME, port)
+
+    def get_debug_server_ready_marker_pattern(self):
+        return "^%s$" % self.get_debug_server_ready_marker("[0-9]+")
+
     def _target_wait_for_tcp_port_cmd(self, pid_var=None):
         cleanup = ""
         if pid_var:
@@ -130,6 +136,7 @@ class GdbCrossConfig(DebuggerCrossConfig):
     gdbinit / gdb wrapper scripts used by ide=none as well as the
     target-side tmp/pid/log paths consumed by the gdbserver start command.
     """
+    DEBUG_SERVER_NAME = "gdbserver"
 
     def __init__(self, image_recipe, modified_recipe, binary,
                  default_mode=DebuggerServerModes.MULTI):
@@ -172,26 +179,35 @@ class GdbCrossConfig(DebuggerCrossConfig):
           "\"/bin/sh -c '/usr/bin/gdbserver --once :1234 /usr/bin/cmake-example'\""
         """
         if server_mode == DebuggerServerModes.ONCE:
-            gdbserver_cmd_start = "%s --once :%s %s" % (
+            gdbserver_cmd_start = "%s --once :%s %s & " % (
                 self.debugger_cross.debug_server_path, self.debug_server_port, self.binary.binary_path)
+            gdbserver_cmd_start += "_gdbserver_pid=\\$!; "
+            gdbserver_cmd_start += self._target_wait_for_tcp_port_cmd(
+                "gdbserver_pid") + " "
+            gdbserver_cmd_start += "echo %s; wait \\$_gdbserver_pid" % (
+                self.get_debug_server_ready_marker(self.debug_server_port))
         elif server_mode == DebuggerServerModes.ATTACH:
             pid_command = self.binary.pid_command
             if pid_command:
-                gdbserver_cmd_start = "%s --attach :%s \\$(%s)" % (
+                gdbserver_cmd_start = "%s --attach :%s \\$(%s) & " % (
                     self.debugger_cross.debug_server_path,
                     self.debug_server_port,
                     pid_command)
+                gdbserver_cmd_start += "_gdbserver_pid=\\$!; "
+                gdbserver_cmd_start += self._target_wait_for_tcp_port_cmd(
+                    "gdbserver_pid") + " "
+                gdbserver_cmd_start += "echo %s; wait \\$_gdbserver_pid" % (
+                    self.get_debug_server_ready_marker(self.debug_server_port))
             else:
                 raise DevtoolError("Cannot use gdbserver attach mode for binary %s. No PID found." % self.binary.binary_path)
         elif server_mode == DebuggerServerModes.MULTI:
-            hex_port = "%04X" % self.debug_server_port
-            gdbserver_cmd_start = "grep -q :%s /proc/net/tcp /proc/net/tcp6 2>/dev/null && exit 0; " % hex_port
+            gdbserver_cmd_start = self._target_tcp_port_check_cmd() + " && exit 0; "
             gdbserver_cmd_start += "mkdir -p %s; " % self._gdbserver_tmp_dir(server_mode)
-            gdbserver_cmd_start += "%s --multi :%s > %s 2>&1 & " % (
+            gdbserver_cmd_start += "%s --multi :%s > %s 2>&1 & _gdbserver_pid=\\$!; " % (
                 self.debugger_cross.debug_server_path, self.debug_server_port, self._gdbserver_log_file(server_mode))
-            gdbserver_cmd_start += "echo \\$! > %s; " % self._gdbserver_pid_file(server_mode)
-            gdbserver_cmd_start += "_w=0; while ! grep -q :%s /proc/net/tcp /proc/net/tcp6 2>/dev/null; " % hex_port
-            gdbserver_cmd_start += "do _w=\\$((_w+1)); [ \\$_w -lt 100 ] || exit 1; sleep 0.1; done;"
+            gdbserver_cmd_start += "echo \\$_gdbserver_pid > %s; " % self._gdbserver_pid_file(server_mode)
+            gdbserver_cmd_start += self._target_wait_for_tcp_port_cmd(
+                "gdbserver_pid")
         else:
             raise DevtoolError("Unsupported gdbserver mode: %s" % server_mode)
         return "\"/bin/sh -c '" + gdbserver_cmd_start + "'\""
@@ -235,10 +251,7 @@ class LldbServerConfig(DebuggerCrossConfig):
         # lldb-server 21.x and the remote lldb client connects from the host.
         # Start from /tmp because lldb-server creates temp files in its cwd and
         # the SSH default cwd (/home/root) may not exist on a minimal image.
-        if mode == DebuggerServerModes.ONCE:
-            cmd = "cd /tmp && %s platform --one-shot --server --listen *:%s" % (
-                lldb_server, self.debug_server_port)
-        elif mode == DebuggerServerModes.MULTI:
+        if mode == DebuggerServerModes.MULTI:
             pid_file = self._lldb_server_pid_file(mode)
             tmp_dir = self._lldb_server_tmp_dir(mode)
             log_file = self._lldb_server_log_file(mode)
@@ -252,8 +265,8 @@ class LldbServerConfig(DebuggerCrossConfig):
                 "lldb_server_pid")
         else:
             raise DevtoolError(
-                "lldb-server does not support mode %s "
-                "(ATTACH is handled client-side with 'process attach')" % mode)
+                "lldb-server only supports MULTI mode; "
+                "ATTACH is handled client-side with 'process attach': %s" % mode)
         return "\"/bin/sh -c '" + cmd + "'\""
 
     def _target_kill_cmd(self):

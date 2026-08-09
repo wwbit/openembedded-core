@@ -609,6 +609,11 @@ class IdeVSCode(IdeBase):
                     # ONCE / ATTACH: gdbserver runs in the foreground for the
                     # whole session, so VSCode needs isBackground + a pattern
                     # matcher to avoid waiting for the task to exit.
+                    if server_mode in (DebuggerServerModes.ONCE,
+                                       DebuggerServerModes.ATTACH):
+                        ends_pattern = cross_debug_config.get_debug_server_ready_marker_pattern()
+                    else:
+                        ends_pattern = "."
                     new_task = {
                         "label": cross_debug_config.id_pretty_mode(server_mode),
                         "type": "shell",
@@ -628,7 +633,7 @@ class IdeVSCode(IdeBase):
                                 "background": {
                                     "activeOnStart": True,
                                     "beginsPattern": ".",
-                                    "endsPattern": ".",
+                                    "endsPattern": ends_pattern,
                                 }
                             }
                         ]
