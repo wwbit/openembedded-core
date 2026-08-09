@@ -1,0 +1,71 @@
+name: Build BlueZ RPM
+
+on:
+  workflow_dispatch:
+    inputs:
+      machine:
+        description: 'Target MACHINE'
+        required: false
+        default: 'qcs615-ride'
+        type: choice
+        options:
+          - qcs615-ride
+          - iq-615-evk
+
+env:
+  KAS_CLONE_DEPTH: 1
+
+jobs:
+  build-bluez:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout oe-core (this repo)
+        uses: actions/checkout@v6
+        with:
+          path: openembedded-core
+
+      - name: Clone meta-qcom
+        run: |
+          git clone --depth 1 --branch wrynose \
+            https://github.com/qualcomm-linux/meta-qcom.git \
+            ${GITHUB_WORKSPACE}/meta-qcom
+
+      - name: Generate kas override configuration
+        run: |
+          cat > ${GITHUB_WORKSPACE}/meta-qcom/kas-bluez.yml << 'KASEOF'
+          header:
+            version: 14
+
+          repos:
+            oe-core:
+              url: null
+              path: openembedded-core
+              layers:
+                meta:
+
+          overrides:
+            repos:
+              oe-core:
+                commit: null
+          KASEOF
+
+      - name: Install kas
+        run: pip install --break-system-packages kas
+
+      - name: Kas build bluez5
+        run: |
+          kas-container build --target bluez5 \
+            meta-qcom/ci/ci.yml:meta-qcom/ci/${{ inputs.machine }}.yml:meta-qcom/kas-bluez.yml
+
+      - name: Collect RPM packages
+        run: |
+          mkdir -p rpms
+          find build/tmp/deploy/rpm -name "bluez5*.rpm" -exec cp -v {} rpms/ \;
+
+      - name: Upload RPM artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: bluez5-rpms-${{ inputs.machine }}
+          path: rpms/
