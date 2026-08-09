@@ -2012,8 +2012,8 @@ class DevtoolDeployTargetTests(DevtoolBase):
                 self.logger.debug(deploy_cmd)
                 result = runCmd(deploy_cmd)
                 # Run a test command to see if it was installed properly
-                sshargs = '-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no'
-                result = runCmd('ssh %s root@%s %s' % (sshargs, qemu.ip, testcommand))
+                status, _ = qemu.run(testcommand)
+                self.assertEqual(status, 0)
                 # Check if it deployed all of the files with the right ownership/perms
                 # First look on the host - need to do this under pseudo to get the correct ownership/perms
                 bb_vars = get_bb_vars(['D', 'FAKEROOTENV', 'FAKEROOTCMD', 'PATH'], testrecipe)
@@ -2032,15 +2032,21 @@ class DevtoolDeployTargetTests(DevtoolBase):
                     for line in filelist1:
                         splitline = line.split()
                         f.write(splitline[-1] + '\n')
-                result = runCmd('cat %s | ssh -q %s root@%s \'xargs ls -l\'' % (tmpfilelist, sshargs, qemu.ip))
-                filelist2 = self._process_ls_output(result.output)
+                remotefilelist = '/tmp/%s' % os.path.basename(tmpfilelist)
+                status, _ = qemu.copy_to(tmpfilelist, remotefilelist)
+                self.assertEqual(status, 0)
+                status, output = qemu.run(
+                    'xargs ls -l < %s; status=$?; rm -f %s; exit $status' % (
+                        remotefilelist, remotefilelist))
+                self.assertEqual(status, 0)
+                filelist2 = self._process_ls_output(output)
                 filelist1.sort(key=lambda item: item.split()[-1])
                 filelist2.sort(key=lambda item: item.split()[-1])
                 self.assertEqual(filelist1, filelist2)
                 # Test undeploy-target
                 result = runCmd('devtool undeploy-target -c %s root@%s' % (testrecipe, qemu.ip))
-                result = runCmd('ssh %s root@%s %s' % (sshargs, qemu.ip, testcommand), ignore_status=True)
-                self.assertNotEqual(result, 0, 'undeploy-target did not remove command as it should have')
+                status, _ = qemu.run(testcommand)
+                self.assertNotEqual(status, 0, 'undeploy-target did not remove command as it should have')
 
 class DevtoolBuildImageTests(DevtoolBase):
 
@@ -3510,13 +3516,10 @@ class DevtoolIdeSdkTests(DevtoolBase):
         self.assertEqual(task_command, "ssh", f"Task '{prelaunch_task_name}' should use ssh command")
         self.assertTrue(len(task_args) >= 2, f"Task '{prelaunch_task_name}' should have at least 2 args (ssh options and remote command)")
 
-        sshargs = '-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no'
-        result = runCmd('ssh %s root@%s %s' % (sshargs, qemu.ip, 'test -x /usr/bin/gdbserver'),
-                        output_log=self._cmd_logger)
-        self.assertEqual(result.status, 0, "gdbserver should be installed on target")
-        result = runCmd('ssh %s root@%s %s' % (sshargs, qemu.ip, 'test -x ' + os.path.join('/usr/bin', example_exe)),
-                        output_log=self._cmd_logger)
-        self.assertEqual(result.status, 0, "Example binary should be installed on target")
+        status, _ = qemu.run('test -x /usr/bin/gdbserver')
+        self.assertEqual(status, 0, "gdbserver should be installed on target")
+        status, _ = qemu.run('test -x ' + os.path.join('/usr/bin', example_exe))
+        self.assertEqual(status, 0, "Example binary should be installed on target")
 
         # Start gdbserver on target using the task command (keep the ssh connection open while debugging)
         ssh_gdbserver_cmd = [task_command] + task_args
