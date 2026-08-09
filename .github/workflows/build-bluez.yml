@@ -21,6 +21,17 @@ jobs:
     timeout-minutes: 360
 
     steps:
+      - name: Cache Yocto downloads and sstate
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            cache/downloads
+            cache/sstate
+          key: yocto-bluez-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_number }}
+          restore-keys: |
+            yocto-bluez-${{ runner.os }}-${{ github.ref_name }}-
+
       - name: Checkout oe-core (this repo)
         uses: actions/checkout@v6
         with:
@@ -51,13 +62,31 @@ jobs:
                 commit: null
           KASEOF
 
+          cat > ${GITHUB_WORKSPACE}/meta-qcom/kas-cache.yml << 'CACHEEOF'
+          header:
+            version: 14
+          local_conf_header:
+            cache: |
+              DL_DIR = "${TOPDIR}/../cache/downloads"
+              SSTATE_MIRRORS =+ "file://${TOPDIR}/../cache/sstate/PATH "
+          CACHEEOF
+
+      - name: Fix cache permissions
+        run: |
+          mkdir -p cache/downloads cache/sstate
+
       - name: Install kas
         run: pip install --break-system-packages kas
 
       - name: Kas build bluez5
         run: |
           kas-container build --target bluez5 \
-            meta-qcom/ci/ci.yml:meta-qcom/ci/${{ inputs.machine }}.yml:meta-qcom/kas-bluez.yml
+            meta-qcom/ci/ci.yml:meta-qcom/ci/${{ inputs.machine }}.yml:meta-qcom/kas-cache.yml:meta-qcom/kas-bluez.yml
+
+      - name: Sync sstate back to cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          rsync -a --ignore-existing build/sstate-cache/ cache/sstate/
 
       - name: Collect RPM packages
         run: |
