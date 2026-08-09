@@ -2747,6 +2747,20 @@ class RunCmdBackground:
 
     def __enter__(self):
         self.cmd.run()
+        return self
+
+    def wait_for_output(self, pattern, timeout):
+        pattern = re.compile(pattern, re.MULTILINE)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            output = b"".join(self.cmd._output_chunks).decode(
+                "utf-8", errors="replace")
+            if pattern.search(output):
+                return True
+            if self.cmd.process.poll() is not None:
+                break
+            time.sleep(0.1)
+        return False
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.cmd.stop()
@@ -3514,16 +3528,12 @@ class DevtoolIdeSdkTests(DevtoolBase):
         if len(ssh_gdbserver_cmd) > 0 and ssh_gdbserver_cmd[-1].startswith('"') and ssh_gdbserver_cmd[-1].endswith('"'):
             ssh_gdbserver_cmd[-1] = ssh_gdbserver_cmd[-1][1:-1].replace('\\$', '$')
         self.logger.debug(f"Starting gdbserver with command: {' '.join(ssh_gdbserver_cmd)}")
-        with RunCmdBackground(ssh_gdbserver_cmd, output_log=self._cmd_logger):
-            # Give gdbserver a moment to start
-            time.sleep(1)
-
-            # Verify gdbserver is running on target and listening on expected port
-            result = runCmd('ssh %s root@%s %s' % (sshargs, qemu.ip, 'ps'), output_log=self._cmd_logger)
-            self.assertEqual(result.status, 0, "Failed to check processes on target")
-            self.assertIn("gdbserver", result.output, "gdbserver should be running on target")
-            _, server_port = server_addr.split(':')
-            self.assertIn(server_port, result.output, f"gdbserver should be listening on port {server_port}")
+        _, server_port = server_addr.split(':')
+        with RunCmdBackground(ssh_gdbserver_cmd, output_log=self._cmd_logger) as gdbserver:
+            ready_pattern = prelaunch_task["problemMatcher"][0]["background"]["endsPattern"]
+            self.assertTrue(
+                gdbserver.wait_for_output(ready_pattern, timeout=15),
+                "gdbserver did not report readiness on port %s" % server_port)
 
             if debug_func and debug_check_func:
                 # Do a gdb remote session using the once configuration
