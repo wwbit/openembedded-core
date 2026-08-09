@@ -117,6 +117,13 @@ class DebuggerCrossConfig:
             % (self._target_tcp_port_check_cmd(), cleanup, self.DEBUG_SERVER_NAME,
                self.debug_server_port))
 
+    def _target_wait_for_process_exit_cmd(self, pid_var):
+        return (
+            "_w=0; while kill -0 \\$_%s 2>/dev/null; do _w=\\$((_w+1)); "
+            "[ \\$_w -lt 100 ] || { echo %s did not stop >&2; exit 1; }; "
+            "sleep 0.1; done;"
+            % (pid_var, self.DEBUG_SERVER_NAME))
+
     def initialize(self):
         """Called after construction to generate any required config files."""
         pass
